@@ -401,8 +401,15 @@ static void ns_render(void *fragment, void *frame, SettingsModel *model) {
         int kind = model->kinds[i];
         float row_height = (kind == 1 ? 42 : kind == 4 ? 148 : kind == 5 ? 36 : 64) * u;
         if (kind == 4) {
-            int count = 0; while (model->titles[i][count]) count++;
-            row_height = (32 + 28 * (1 + (int)(count * 19 * u / (inner_width - 56 * u)))) * u;
+            int count = 0, segment = 0, lines = 0;
+            while (model->titles[i][count]) {
+                if (model->titles[i][count++] == '\n') {
+                    lines += 1 + (int)(segment * 19 * u / (inner_width - 56 * u));
+                    segment = 0;
+                } else segment++;
+            }
+            lines += 1 + (int)(segment * 19 * u / (inner_width - 56 * u));
+            row_height = (32 + 28 * lines) * u;
         }
         void *row = ns_flex(items, 0, 1);
         ns_size(row, inner_width - 24 * u, row_height);

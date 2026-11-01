@@ -4,13 +4,12 @@ import argparse
 import hashlib
 import os
 import shutil
-import struct
 import subprocess
 import zipfile
+from apk_metadata import patch_manifest, patch_provider_paths, version
 
 ROOT = Path(__file__).resolve().parent
 BASE_SHA256 = "7f88ecbcb20c16d07ed7f427d25b79a31062209295a133f3d846128b7cbc9b54"
-VERSION_CODE = 26000008
 
 
 def main():
@@ -24,6 +23,7 @@ def main():
     parser.add_argument("--platform", default="android-35")
     parser.add_argument("--output", type=Path, default=ROOT / "build/amap-auto-95-custom.apk")
     args = parser.parse_args()
+    info = version()
     if hashlib.sha256(args.base_apk.read_bytes()).hexdigest() != BASE_SHA256:
         parser.error("--base-apk must be the versionCode 26000007 cruise-response build")
     build = ROOT / "build"
@@ -33,6 +33,12 @@ def main():
         if directory.exists():
             shutil.rmtree(directory)
         directory.mkdir()
+    generated = build / "generated/floatapp/update/BuildInfo.java"
+    generated.parent.mkdir(parents=True, exist_ok=True)
+    generated.write_text('package floatapp.update;\npublic final class BuildInfo {\n'
+        + ''.join('    public static final String ' + key + ' = "' + info[field] + '";\n'
+                  for key, field in (("VERSION_NAME", "versionName"), ("PACKAGE_NAME", "packageName"), ("REPOSITORY", "repository")))
+        + '    public static final int VERSION_CODE = ' + str(info["versionCode"]) + ';\n}\n', encoding="utf-8")
     android = args.sdk / "platforms" / args.platform / "android.jar"
     bt = args.sdk / "build-tools" / args.build_tools
     host = "darwin-x86_64" if os.uname().sysname == "Darwin" else "linux-x86_64"
@@ -44,10 +50,10 @@ def main():
     native = build / "libamapextras.so"
     run(clang, "-shared", "-fPIC", "-O2", "-Wl,-z,max-page-size=16384",
         ROOT / "src/native/extras.c", "-ldl", "-o", native)
-    sources = sorted((ROOT / "src/java").rglob("*.java")) + sorted((ROOT / "src/stubs").rglob("*.java"))
+    sources = sorted((ROOT / "src/java").rglob("*.java")) + sorted((ROOT / "src/stubs").rglob("*.java")) + [generated]
     run("javac", "-source", "8", "-target", "8", "-encoding", "UTF-8", "-cp", android, "-d", classes, *sources)
     # Compile-only vendor signatures must never be included in the helper dex.
-    packaged = [file for group in ("audio", "floatset", "font", "startup", "input")
+    packaged = [file for group in ("audio", "floatset", "font", "startup", "input", "update")
                 for file in sorted((classes / "floatapp" / group).glob("*.class"))]
     run(bt / "d8", "--min-api", "21", "--lib", android, "--output", dex, *packaged)
     with zipfile.ZipFile(args.base_apk) as base, zipfile.ZipFile(build / "unsigned.apk", "w") as out:
@@ -59,9 +65,9 @@ def main():
                 continue
             data = base.read(name)
             if name == "AndroidManifest.xml":
-                previous = struct.pack("<HBBI", 8, 0, 0x10, 26000007)
-                assert data.count(previous) == 1, "Unexpected baseline manifest"
-                data = data.replace(previous, struct.pack("<HBBI", 8, 0, 0x10, VERSION_CODE), 1)
+                data = patch_manifest(data, info)
+            elif name == "res/zz.xml":
+                data = patch_provider_paths(data)
             out.writestr(item, data)
         out.write(dex / "classes.dex", "classes2.dex", compress_type=zipfile.ZIP_DEFLATED)
         out.write(native, "lib/arm64-v8a/libamapextras.so", compress_type=zipfile.ZIP_STORED)

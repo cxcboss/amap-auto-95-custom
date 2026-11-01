@@ -7,6 +7,8 @@ import floatapp.audio.NavVolume;
 import floatapp.startup.BootStartup;
 import floatapp.tts.ttsSettings;
 import floatapp.tts.ttsService;
+import floatapp.update.BuildInfo;
+import floatapp.update.Updates;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -39,7 +41,13 @@ public final class NativeSettings {
         }
     }
 
-    static void bind(Activity host) { activity = host; nativeBind(); }
+    static void bind(Activity host) {
+        activity = host; nativeBind();
+        Updates.initialize(host, NativeSettings::updateChanged);
+    }
+    private static void updateChanged() {
+        if (activity != null && settingsPage && visible && (mode == 3 || mode == 0 && selected == 3)) render(false);
+    }
     static void detach() { activity = null; settingsPage = false; }
     static void ensure(boolean page) {
         if (!page) {
@@ -74,6 +82,13 @@ public final class NativeSettings {
             if (action == 4) { ttsService.c().e("前方路口请右转，请注意行车安全。"); return; }
             if (action == 5) { BootStartup.openStartupSettings(activity); return; }
             if (action == 6) { BootStartup.openOverlaySettings(activity); return; }
+            if (action == 30) { mode = 3; render(true); return; }
+            if (action == 31) { Updates.check(); return; }
+            if (action == 32) { Updates.download(activity); return; }
+            if (action == 33) { Updates.install(activity); return; }
+            if (action == 34) { Updates.copyPath(); return; }
+            if (action == 35) { Updates.cancel(); return; }
+            if (action == 36) { Updates.toggleAutoCheck(); return; }
             if (action == 2) {
                 draft = input == null ? draft : input.trim();
                 String checked = validate(editing, draft);
@@ -117,6 +132,7 @@ public final class NativeSettings {
     private static void render(boolean reset) {
         titles.clear(); values.clear(); kinds.clear(); actions.clear(); help.clear(); settings.clear();
         if (mode == 0) showSection();
+        else if (mode == 3) showUpdate();
         else if (mode == 2) {
             add(editing.description, "", 4, 0, 0);
             add("默认值", display(editing, editing.initial), 0, 0, 0);
@@ -135,7 +151,7 @@ public final class NativeSettings {
             action("保存", 2); action("取消", 1);
         }
         int inputType = mode != 1 ? 0 : editing.kind == 2 ? 2 : editing.kind == 1 || editing.min >= 0 ? 1 : 0;
-        nativeRender(visible, selected, mode, reset, mode == 0 ? "扩展设置" : editing.title, draft, inputType,
+        nativeRender(visible, selected, mode, reset, mode == 0 ? "扩展设置" : mode == 3 ? "软件更新" : editing.title, draft, inputType,
             titles.toArray(new String[0]), values.toArray(new String[0]), ints(kinds), ints(actions), ints(help));
     }
     private static int[] ints(ArrayList<Integer> items) {
@@ -160,6 +176,26 @@ public final class NativeSettings {
     private static void row(Setting setting) {
         int index = settings.size(); settings.add(setting);
         add(setting.title, display(setting, value(setting)), setting.kind == 0 ? 2 : 0, 100 + index, 1000 + index);
+    }
+    private static void showUpdate() {
+        add("当前版本", BuildInfo.VERSION_NAME, 0, 0, 0);
+        if (Updates.release != null) add("最新版本", Updates.release.name, 0, 0, 0);
+        add("更新状态", Updates.state == Updates.State.DOWNLOADING ? Updates.progress + "%" : Updates.status, 0, 0, 0);
+        add("自动检查更新", Updates.autoCheck() ? "开启" : "关闭", 2, 36, 0);
+        if (!Updates.error.isEmpty()) add(Updates.error, "", 5, 0, 0);
+        if (!Updates.busy()) action("检查更新", 31);
+        if (Updates.state == Updates.State.AVAILABLE) action("下载并安装", 32);
+        if (Updates.state == Updates.State.DOWNLOADING) action("取消下载", 35);
+        if (Updates.state == Updates.State.READY) {
+            action("重试安装", 33);
+            action("复制路径", 34);
+            heading("安装包位置");
+            add(Updates.path(), "", 4, 0, 0);
+        }
+        if (Updates.release != null && !Updates.release.notes.isEmpty()) {
+            heading("更新内容");
+            add(Updates.release.notes, "", 4, 0, 0);
+        }
     }
     private static void showSection() {
         if (selected == 0) {
@@ -199,6 +235,7 @@ public final class NativeSettings {
             text("weatherGreeting", "天气问候语", "", "在天气播报开头加入的文字。", -1, -1);
             text("apiKey", "高德 Key", "", "自定义天气服务使用的 Key；留空沿用原包的备用接口。", -1, -1);
         } else if (selected == 3) {
+            add("软件更新", Updates.state == Updates.State.AVAILABLE ? "发现新版本" : BuildInfo.VERSION_NAME, 0, 30, 0);
             heading("启动");
             toggle("launchOnBoot", "开机启动", true, "系统开机完成并解锁后自动打开高德。部分设备需要允许自启动、后台弹出界面或显示在其他应用上层。首次安装后需手动打开一次。");
             action("自启动权限", 5);
