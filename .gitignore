@@ -1,0 +1,10 @@
+/build/
+*.apk
+*.dex
+*.so
+*.pk8
+*.pem
+*.jks
+*.keystore
+__pycache__/
+.DS_Store
