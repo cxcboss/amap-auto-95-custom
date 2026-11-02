@@ -25,23 +25,9 @@ public final class SettingsEntry {
     private static String adjustedPage = "";
     private static boolean backgroundBack, settingsBack;
     private static final Runnable refresh = () -> {
-        if (activity == null) return;
-        String page = nativePageType();
-        String name = page == null ? "" : page.toLowerCase(java.util.Locale.ROOT);
-        boolean cruise = name.contains("gfragmentcruise");
-        cruiseButton.setVisibility(cruise && !cruiseButton.opening ? View.VISIBLE : View.GONE);
-        if (cruise && !cruiseButton.opening) nativeOpenEntry(3, cruiseButton);
-        if (!page.equals(adjustedPage)) {
-            adjustedPage = page;
-            IdleRender.wake();
-            if (name.contains("cgnavifragment")) {
-                nativeOpenEntry(2, null);
-                IdleRender.lowerVoicePriority();
-            }
-        }
-        boolean show = name.contains("settingmainfragment") || name.equals("settingmain") || name.equals("设置");
-        NativeSettings.ensure(show);
+        if (cruiseButton != null) nativeOpenEntry(6, cruiseButton);
     };
+    private static final Runnable settledRefresh = () -> refresh.run();
     public static void attach(Activity a, ViewGroup unused) {
         detach();
         HighRefresh.apply(a);
@@ -130,17 +116,25 @@ public final class SettingsEntry {
         if (cruiseButton != null && ((state >= 8 && state <= 12)
                 || state == 24 || state == 25 || state == 46 || state == 47)) {
             cruiseButton.removeCallbacks(refresh);
-            cruiseButton.postDelayed(refresh, 100);
+            cruiseButton.postOnAnimation(refresh);
+            cruiseButton.removeCallbacks(settledRefresh);
+            cruiseButton.postDelayed(settledRefresh, 160);
         }
     }
     public static void schedule() {
-        if (cruiseButton != null) { cruiseButton.removeCallbacks(refresh); cruiseButton.postDelayed(refresh, 450); }
+        if (cruiseButton != null) {
+            cruiseButton.removeCallbacks(refresh);
+            cruiseButton.postOnAnimation(refresh);
+            cruiseButton.removeCallbacks(settledRefresh);
+            cruiseButton.postDelayed(settledRefresh, 160);
+        }
     }
     public static void detach() {
         IdleRender.stop();
         NativeSettings.detach();
         if (cruiseButton != null) {
             cruiseButton.removeCallbacks(refresh);
+            cruiseButton.removeCallbacks(settledRefresh);
             ((ViewGroup) cruiseButton.getParent()).removeView(cruiseButton);
         }
         cruiseButton = null;
@@ -154,6 +148,27 @@ public final class SettingsEntry {
         private boolean opening;
 
         CruiseButton(Context context) { super(context); }
+
+        // The snapshot is queued on GFrame's thread, after its pending page work.
+        public void pageChanged(String page) {
+            post(() -> {
+                if (getParent() == null) return;
+                String name = page.toLowerCase(java.util.Locale.ROOT);
+                boolean cruise = name.contains("gfragmentcruise");
+                setVisibility(cruise && !opening ? View.VISIBLE : View.GONE);
+                if (cruise && !opening) nativeOpenEntry(3, this);
+                if (!page.equals(adjustedPage)) {
+                    adjustedPage = page;
+                    IdleRender.wake();
+                    if (name.contains("cgnavifragment")) {
+                        nativeOpenEntry(2, null);
+                        IdleRender.lowerVoicePriority();
+                    }
+                }
+                boolean show = name.contains("settingmainfragment") || name.equals("settingmain") || name.equals("设置");
+                NativeSettings.ensure(show);
+            });
+        }
 
         public void entryFinished(boolean changed) {
             post(() -> {

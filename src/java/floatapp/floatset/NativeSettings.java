@@ -1,6 +1,8 @@
 package floatapp.floatset;
 
 import android.app.Activity;
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import floatapp.audio.NavVolume;
@@ -12,6 +14,8 @@ import floatapp.update.Updates;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 /** Preferences only. All controls, editing and scrolling are rendered by Amap's GFrame. */
 public final class NativeSettings {
@@ -21,6 +25,11 @@ public final class NativeSettings {
     private static native void nativeRender(boolean visible, int selected, int mode, boolean reset,
             String title, String draft, int inputType, String[] titles, String[] values, int[] kinds, int[] actions, int[] help);
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final Executor CONFIG_IO = Executors.newSingleThreadExecutor(task -> {
+        Thread worker = new Thread(task, "AmapSettingsWriter");
+        worker.setPriority(Thread.MIN_PRIORITY);
+        return worker;
+    });
     private static Activity activity;
     private static boolean visible, settingsPage;
     private static int selected, mode;
@@ -89,6 +98,18 @@ public final class NativeSettings {
             if (action == 34) { Updates.copyPath(); return; }
             if (action == 35) { Updates.cancel(); return; }
             if (action == 36) { Updates.toggleAutoCheck(); return; }
+            if (action == 37) {
+                SharedPreferences.Editor preferences = activity.getSharedPreferences("enhanced_dynamic_settings", 0).edit();
+                for (String key : new String[]{"guideRoadAnnounce", "cruiseRoadAnnounce",
+                        "guideTrafficLightAnnounce", "cruiseTrafficLightAnnounce", "weatherAnnounce"}) {
+                    ttsSettings.setDynamic(null, key, "0");
+                    preferences.putString(key, "0");
+                }
+                preferences.apply();
+                writeConfig();
+                render(false);
+                return;
+            }
             if (action == 2) {
                 draft = input == null ? draft : input.trim();
                 String checked = validate(editing, draft);
@@ -201,31 +222,36 @@ public final class NativeSettings {
         if (selected == 0) {
             number("navPercent", "导航音量", "50", "%", "单独衰减导航语音，不改变系统媒体音量或音乐音量。0% 为静音；1% 为最低非零档；100% 为未衰减。每次调整 1%。", 0, 100, false);
             action("试听导航语音", 4);
-            heading("道路播报");
-            toggle("guideRoadAnnounce", "导航道路播报", true, "导航中播报道路信息。");
-            toggle("guideSimpleAnnounce", "导航简洁播报", false, "精简导航中的自定义道路播报。");
-            toggle("cruiseRoadAnnounce", "巡航道路播报", true, "巡航中播报道路信息。");
-            toggle("cruiseSimpleAnnounce", "巡航简洁播报", false, "精简巡航中的自定义道路播报。");
-            number("roadDurationThreshold", "道路播报间隔", "2000", "毫秒", "两次自定义道路播报之间的最短时间。仅控制额外道路播报，不改变高德转向提示。", 0, 60000, false);
+            heading("额外语音播报");
+            action("仅保留高德播报", 37);
+            toggle("guideRoadAnnounce", "导航额外道路播报", true, "道路名称变化时，额外播报“您已驶入”。独立于高德极简、智能播报模式。");
+            toggle("cruiseRoadAnnounce", "巡航额外道路播报", true, "巡航中道路名称变化时，额外播报“您已驶入”。");
+            toggle("guideTrafficLightAnnounce", "导航额外红绿灯播报", true, "达到倒计时提示秒数时，额外播报信号灯变化。关闭后保留地图上的红绿灯和倒计时。");
+            toggle("cruiseTrafficLightAnnounce", "巡航额外红绿灯播报", true, "巡航中额外播报信号灯变化。关闭后保留地图上的红绿灯和倒计时。");
+            toggle("weatherAnnounce", "额外天气播报", true, "播报城市和天气。关闭后保留天气显示。");
+            heading("额外道路播报");
+            toggle("guideSimpleAnnounce", "导航省略桥隧道名称", false, "省略名称以“桥”或“隧道”结尾的额外道路播报。");
+            toggle("cruiseSimpleAnnounce", "巡航省略桥隧道名称", false, "省略名称以“桥”或“隧道”结尾的额外道路播报。");
+            number("roadDurationThreshold", "额外道路播报最短间隔", "2000", "毫秒", "导航和巡航的两次额外道路播报至少间隔此时长。增大后减少播报；不改变高德转向提示。", 0, 60000, false);
             toggle("ignoreMusic", "忽略音乐播放状态", true, "允许原有定制播报逻辑忽略音乐播放状态；不改变系统媒体音量。");
             text("audioChannelLock", "锁定音频通道", "", "留空为自动。可指定 0—20 的通道编号；设备需支持对应通道。修改后重新启动高德。", 0, 20);
         } else if (selected == 1) {
             heading("导航红绿灯");
-            toggle("guideTrafficLightAnnounce", "导航红绿灯播报", true, "启用导航中的红绿灯播报。");
-            toggle("guideSimpleAnnounce2", "导航关闭绿灯播报", false, "开启后省略导航中的绿灯播报。");
+            toggle("guideTrafficLightAnnounce", "导航额外红绿灯播报", true, "额外提醒信号灯即将变化，独立于高德播报模式。关闭后保留地图上的红绿灯和倒计时。");
+            toggle("guideSimpleAnnounce2", "导航省略即将红灯提醒", false, "开启后省略绿灯即将结束时的额外语音，保留红灯即将结束时的提醒。");
             number("guideSpeedLimit", "导航播报速度", "25", "km/h", "无有效路口距离数据时，按此速度上限判断是否进行红绿灯播报。", 0, 200, false);
             number("guideDistanceLimit", "导航播报距离", "200", "米", "有有效路口距离数据时，在该距离内进行红绿灯播报。", 1, 2000, false);
             number("guideTrafficCountdown", "导航倒计时提示", "5", "秒", "红绿灯倒计时达到此秒数时触发提示。", 1, 120, false);
             heading("巡航红绿灯");
-            toggle("cruiseTrafficLightAnnounce", "巡航红绿灯播报", true, "启用巡航中的红绿灯播报。");
-            toggle("cruiseSimpleAnnounce2", "巡航关闭绿灯播报", false, "开启后省略巡航中的绿灯播报。");
+            toggle("cruiseTrafficLightAnnounce", "巡航额外红绿灯播报", true, "额外提醒巡航中的信号灯变化。关闭后保留地图上的红绿灯和倒计时。");
+            toggle("cruiseSimpleAnnounce2", "巡航省略即将红灯提醒", false, "开启后省略绿灯即将结束时的额外语音，保留红灯即将结束时的提醒。");
             number("cruiseSpeedLimit", "巡航播报速度", "25", "km/h", "无有效路口距离数据时，按此速度上限判断是否进行红绿灯播报。", 0, 200, false);
             number("cruiseDistanceLimit", "巡航播报距离", "200", "米", "有有效路口距离数据时，在该距离内进行红绿灯播报。", 1, 2000, false);
             number("cruiseTrafficCountdown", "巡航倒计时提示", "5", "秒", "红绿灯倒计时达到此秒数时触发提示。", 1, 120, false);
             number("cruiseTrafficCountdownCombined", "组合灯播报窗口", "7", "秒", "把倒计时落在该时间窗口内的其他方向信号灯合并播报。", 1, 120, false);
             text("tliSdkUseId", "领航用户 ID", "", "用于原有路口距离服务。留空时使用速度限制条件。修改后重新启动高德。", -1, -1);
         } else if (selected == 2) {
-            toggle("weatherAnnounce", "天气播报", true, "播报所在城市及天气信息。");
+            toggle("weatherAnnounce", "额外天气播报", true, "额外播报所在城市及天气，独立于高德播报模式。关闭后保留天气显示。");
             toggle("weatherSimpleAnnounce", "天气简洁播报", true, "使用精简天气内容。");
             toggle("cityAnnounceProvince", "播报省份", false, "在城市名称中包含省份。");
             toggle("cityAnnounceCity", "播报城市", true, "在天气播报中包含城市名称。");
@@ -280,9 +306,16 @@ public final class NativeSettings {
         else {
             ttsSettings.setDynamic(null, setting.key, value);
             activity.getSharedPreferences("enhanced_dynamic_settings", 0).edit().putString(setting.key, value).apply();
-            new File(ttsSettings.CONFIG_DIR, ttsSettings.CONFIG_NAME).delete();
-            ttsSettings.generateSettingsFile(activity);
+            writeConfig();
         }
+    }
+
+    private static void writeConfig() {
+        Context context = activity.getApplicationContext();
+        CONFIG_IO.execute(() -> {
+            new File(ttsSettings.CONFIG_DIR, ttsSettings.CONFIG_NAME).delete();
+            ttsSettings.generateSettingsFile(context);
+        });
     }
 
 }

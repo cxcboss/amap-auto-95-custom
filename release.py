@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 import subprocess
+import zipfile
 from apk_metadata import ROOT, version
 
 
@@ -23,6 +24,18 @@ def inspect(apk, sdk, info):
     identity = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badge)
     if not identity or identity.groups() != (info["packageName"], str(info["versionCode"]), info["versionName"]):
         raise ValueError("APK package/version differs from version.json; rebuild first")
+    manifest = run(tools / "aapt", "dump", "xmltree", apk, "AndroidManifest.xml")
+    if re.search(r"^\s*E: instrumentation\b", manifest, re.MULTILINE) or "com.autonavi.amapauto.receiver_test" in manifest:
+        raise ValueError("Remove instrumentation and the legacy test broadcast alias before release")
+    for flag in re.finditer(r"android:(?:debuggable|testOnly)\(0x[0-9a-f]+\)=\(type 0x12\)(0x[0-9a-f]+)", manifest):
+        if int(flag[1], 16):
+            raise ValueError("Debuggable or test-only APK cannot be released")
+    with zipfile.ZipFile(apk) as archive:
+        for name in archive.namelist():
+            if name.endswith(".dex") or name == "lib/arm64-v8a/libamapextras.so":
+                data = archive.read(name)
+                if any(marker in data for marker in (b"http://127.0.0.1:27695", b"debug.amapqa.cpus", b"Lfloatapp/qa/", b"ArchiveProbe")):
+                    raise ValueError("QA update endpoint or performance probe remains in " + name)
     signatures = run(tools / "apksigner", "verify", "--verbose", "--print-certs", apk)
     digest = re.search(r"Signer #1 certificate SHA-256 digest: ([0-9a-f]+)", signatures)
     if not digest or digest[1] != info["certificateSha256"] or "Number of signers: 1" not in signatures:

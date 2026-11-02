@@ -256,9 +256,9 @@ static void ns_render(void *fragment, void *frame, SettingsModel *model) {
     int night = is_night(ns_context);
     int changed = night != ns_night || width != ns_width || height != ns_height;
     ns_night = night; ns_width = width; ns_height = height;
-    void *navigation = ns_find(root, 0x20700279);
     void *host = ns_find(root, 0x207007d1);
     void *last_tab = ns_find(root, 0x20700337);
+    void *navigation = last_tab ? *(void **)((char *)last_tab + 8) : 0;
     if (!navigation || !host || !last_tab) return;
     // The bundled settings tabs are 96 design units high; use their actual native scale.
     ns_unit = *(int *)((char *)last_tab + 0xbc) / 96.0f;
@@ -269,9 +269,12 @@ static void ns_render(void *fragment, void *frame, SettingsModel *model) {
     unsigned int secondary = night ? 0xff999999 : 0xff666666;
     unsigned int selected = night ? 0xff263e60 : 0xffe7f0ff;
     unsigned int blue = night ? 0xff70a9ff : 0xff287cff;
+    int entry_top = *(int *)((char *)last_tab + 0xcc) - *(int *)((char *)root + 0xcc)
+            + *(int *)((char *)last_tab + 0xbc);
+    int header_entry = entry_top + *(int *)((char *)last_tab + 0xbc) > height;
     void *entry = ns_find(root, NS_ENTRY);
     if (!entry) {
-        entry = ns_create(u"TextView", navigation, NS_ENTRY);
+        entry = ns_create(u"TextView", root, NS_ENTRY);
         if (!entry) return;
         ns_click(entry, 8);
         ns_previous_tab = -1;
@@ -287,12 +290,20 @@ static void ns_render(void *fragment, void *frame, SettingsModel *model) {
     if (changed) {
         int tab_width = *(int *)((char *)last_tab + 0xb8);
         int tab_height = *(int *)((char *)last_tab + 0xbc);
-        ns_text(entry, u"⋯\n扩展", 18 * u, secondary, 0x11);
+        ns_text(entry, header_entry ? u"扩展" : u"⋯\n扩展", 18 * u, secondary, 0x11);
+        int entry_left = *(int *)((char *)last_tab + 0xc8) - *(int *)((char *)root + 0xc8);
+        if (header_entry) {
+            entry_left = width - tab_width;
+            entry_top = 0;
+            tab_height = *(int *)((char *)ns_find(root, 0x20700061) + 0xbc);
+        }
         ns_size(entry, tab_width, tab_height);
-        // Native constraint anchors: left-to-left of parent, top-to-bottom of the last tab.
+        // Position inside the visible root; landscape has no space for a fifth sidebar tab.
         void *params = *(void **)((char *)entry + 0x648);
         *(int *)((char *)params + 0x68) = 0x10700000;
-        *(int *)((char *)params + 0x7c) = 0x20700337;
+        *(int *)((char *)params + 0x78) = 0x10700000;
+        *(int *)((char *)params + 0x30) = entry_left;
+        *(int *)((char *)params + 0x34) = entry_top;
         ns_background(entry, bg);
         NS_FN(void (*)(void *, int), 0x5b1a4c)(navigation, 1);
         NS_FN(void (*)(void *, int), 0x625ce0)(root, 1);
@@ -326,7 +337,7 @@ static void ns_render(void *fragment, void *frame, SettingsModel *model) {
             NS_FN(void (*)(void *, int), 0x629e6c)(ns_find(navigation, tab_views[ns_previous_tab][j]), 1);
         ns_previous_tab = -1;
     }
-    ns_text(entry, u"⋯\n扩展", 18 * u, model->visible ? blue : secondary, 0x11);
+    ns_text(entry, header_entry ? u"扩展" : u"⋯\n扩展", 18 * u, model->visible ? blue : secondary, 0x11);
     ns_background(entry, model->visible ? surface : bg);
     width = *(int *)((char *)host + 0xb8);
     height = *(int *)((char *)host + 0xbc);

@@ -90,13 +90,17 @@ static void *cruise_speed(void *view, int (*appear)(void *)) {
     return 0;
 }
 
-static void panel_task_callback(PanelTask *task, int deliver, int night, int right, int top) {
+static void panel_task_callback(PanelTask *task, int deliver, int night, int right, int top, const char *page) {
     if (!task->target) return;
     JNIEnv *env;
     int attach = (*task->vm)->GetEnv(task->vm, (void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED;
     if (attach) (*task->vm)->AttachCurrentThread(task->vm, &env, 0);
     if (deliver) {
-        if (task->action == 3)
+        if (task->action == 6) {
+            jstring snapshot = (*env)->NewStringUTF(env, page);
+            (*env)->CallVoidMethod(env, task->target, task->callback, snapshot);
+            (*env)->DeleteLocalRef(env, snapshot);
+        } else if (task->action == 3)
             (*env)->CallVoidMethod(env, task->target, task->callback,
                     (jboolean)night, (jint)right, (jint)top);
         else
@@ -110,9 +114,15 @@ static void panel_task_callback(PanelTask *task, int deliver, int night, int rig
 static void panel_task_run(PanelTask *task) {
     void *lib = dlopen("libautonavi.so", RTLD_NOW | RTLD_NOLOAD);
     void *frame = dlopen("libGFrame.so", RTLD_NOW | RTLD_NOLOAD);
-    void *fragment = lib && frame ? current_fragment(lib, frame, 0) : 0;
+    int page_state = -1;
+    void *fragment = lib && frame ? current_fragment(lib, frame, &page_state) : 0;
     int entry_changed = 0;
-    if (fragment) {
+    if (task->action == 6) {
+        const char *type = fragment ? (const char *)((void **)(*(void ***)fragment)[-1])[1] : "";
+        char page[384];
+        snprintf(page, sizeof(page), "%d:%s", page_state, type);
+        panel_task_callback(task, 1, 0, 0, 0, page);
+    } else if (fragment) {
         void **vtable = *(void ***)fragment;
         const char *name = (const char *)((void **)vtable[-1])[1];
         if (task->action == 4 || task->action == 5) {
@@ -159,7 +169,7 @@ static void panel_task_run(PanelTask *task) {
                             - *(int *)((char *)root + 0xc8);
                     top = *(int *)((char *)speed + 0xcc) - *(int *)((char *)root + 0xcc);
                 }
-                panel_task_callback(task, 1, isNight(context(fragment)), right, top);
+                panel_task_callback(task, 1, isNight(context(fragment)), right, top, 0);
             }
         } else if (task->action == 2 && strstr(name, "CGNaviFragment")) {
             void (*axis)(void *, float, float) = dlsym(frame,
@@ -176,13 +186,13 @@ static void panel_task_run(PanelTask *task) {
             }
         }
     }
-    if (task->action <= 1) panel_task_callback(task, 1, entry_changed, 0, 0);
+    if (task->action <= 1) panel_task_callback(task, 1, entry_changed, 0, 0, 0);
     if (frame) dlclose(frame);
     if (lib) dlclose(lib);
 }
 
 static void panel_task_delete(PanelTask *task) {
-    panel_task_callback(task, 0, 0, 0, 0);
+    panel_task_callback(task, 0, 0, 0, 0, 0);
     ns_free_model(task->model);
     task->base_destructor(task);
     free(task);
@@ -213,9 +223,12 @@ static jboolean post_panel_task(JNIEnv *env, jint action, jobject target, Settin
             (*env)->GetJavaVM(env, &task->vm);
             task->target = (*env)->NewGlobalRef(env, target);
             jclass type = (*env)->GetObjectClass(env, target);
-            task->callback = task->action == 3
-                    ? (*env)->GetMethodID(env, type, "appearance", "(ZII)V")
-                    : (*env)->GetMethodID(env, type, "entryFinished", "(Z)V");
+            if (task->action == 6)
+                task->callback = (*env)->GetMethodID(env, type, "pageChanged", "(Ljava/lang/String;)V");
+            else if (task->action == 3)
+                task->callback = (*env)->GetMethodID(env, type, "appearance", "(ZII)V");
+            else
+                task->callback = (*env)->GetMethodID(env, type, "entryFinished", "(Z)V");
             (*env)->DeleteLocalRef(env, type);
         }
         task->table[2] = panel_task_run;

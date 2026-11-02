@@ -238,7 +238,8 @@ public final class Updates {
     }
 
     private static void launchInstaller(Activity host) {
-        if (Build.VERSION.SDK_INT >= 26 && !host.getPackageManager().canRequestPackageInstalls()) {
+        if (Build.VERSION.SDK_INT >= 26 && app.getApplicationInfo().targetSdkVersion >= 26
+                && !host.getPackageManager().canRequestPackageInstalls()) {
             error = "请允许安装此来源的应用后重试"; notifyChange();
             try { host.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + BuildInfo.PACKAGE_NAME))); }
             catch (ActivityNotFoundException | SecurityException unavailable) { error = "请在文件管理器中打开安装包"; notifyChange(); }
@@ -280,10 +281,9 @@ public final class Updates {
         if (!hash.toString().equals(target.sha256)) throw new IOException("安装包校验失败，请重新下载");
         PackageManager manager = app.getPackageManager();
         PackageInfo archive = manager.getPackageArchiveInfo(file.getAbsolutePath(), PackageManager.GET_SIGNATURES);
-        PackageInfo installed;
-        try { installed = manager.getPackageInfo(BuildInfo.PACKAGE_NAME, PackageManager.GET_SIGNATURES); }
-        catch (PackageManager.NameNotFoundException impossible) { throw new AssertionError(impossible); }
-        if (archive == null || !BuildInfo.PACKAGE_NAME.equals(archive.packageName)
+        // The coexist base substitutes PackageInfo.signatures. Read the installed APK's real signer.
+        PackageInfo installed = manager.getPackageArchiveInfo(app.getApplicationInfo().sourceDir, PackageManager.GET_SIGNATURES);
+        if (archive == null || installed == null || !BuildInfo.PACKAGE_NAME.equals(archive.packageName)
                 || archive.versionCode != target.code || !target.name.equals(archive.versionName)
                 || archive.versionCode <= installed.versionCode || archive.signatures == null
                 || !Arrays.equals(archive.signatures, installed.signatures))

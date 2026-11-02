@@ -10,6 +10,7 @@ from apk_metadata import patch_manifest, patch_provider_paths, version
 
 ROOT = Path(__file__).resolve().parent
 BASE_SHA256 = "7f88ecbcb20c16d07ed7f427d25b79a31062209295a133f3d846128b7cbc9b54"
+GFRAME_SHA256 = "3285048f3dc2b734de3fe1e30dd5a3ea4092f4dd6092b7c24a61f46741fd4a06"
 
 
 def main():
@@ -50,12 +51,28 @@ def main():
     native = build / "libamapextras.so"
     run(clang, "-shared", "-fPIC", "-O2", "-Wl,-z,max-page-size=16384",
         ROOT / "src/native/extras.c", "-ldl", "-o", native)
+    run(clang.parent / "llvm-strip", "--strip-unneeded", "--remove-section=.comment", native)
+    fade_object, fade_linked = build / "gframe-fade.o", build / "gframe-fade.elf"
+    run(clang, "-c", ROOT / "src/native/gframe_fade.S", "-o", fade_object)
+    run(clang.parent / "ld.lld", "-T", ROOT / "src/native/gframe_fade.ld",
+        "-e", "gframe_fade_enter", fade_object, "-o", fade_linked)
+    fade_patches = []
+    for section, start, end in ((".inflate_enter_branch", 0x5eecb0, 0x5eecb4),
+                                (".inflate_exit_branch", 0x5eee70, 0x5eee74),
+                                (".fade_enter", 0x5f4f40, 0x5f5074),
+                                (".fade_exit", 0x5f51c0, 0x5f5310)):
+        fragment = build / (section[1:] + ".bin")
+        run(clang.parent / "llvm-objcopy", "--dump-section", str(section) + "=" + str(fragment), fade_linked)
+        code = fragment.read_bytes()
+        if len(code) > end - start or len(code) % 4:
+            parser.error("GFrame fade patch exceeds its original transition log block")
+        fade_patches.append((start, end, code + bytes.fromhex("1f2003d5") * ((end - start - len(code)) // 4)))
     sources = sorted((ROOT / "src/java").rglob("*.java")) + sorted((ROOT / "src/stubs").rglob("*.java")) + [generated]
-    run("javac", "-source", "8", "-target", "8", "-encoding", "UTF-8", "-cp", android, "-d", classes, *sources)
+    run("javac", "-source", "8", "-target", "8", "-g:none", "-encoding", "UTF-8", "-cp", android, "-d", classes, *sources)
     # Compile-only vendor signatures must never be included in the helper dex.
     packaged = [file for group in ("audio", "floatset", "font", "startup", "input", "update")
                 for file in sorted((classes / "floatapp" / group).glob("*.class"))]
-    run(bt / "d8", "--min-api", "21", "--lib", android, "--output", dex, *packaged)
+    run(bt / "d8", "--release", "--min-api", "21", "--lib", android, "--output", dex, *packaged)
     with zipfile.ZipFile(args.base_apk) as base, zipfile.ZipFile(build / "unsigned.apk", "w") as out:
         for item in base.infolist():
             name = item.filename
@@ -68,6 +85,13 @@ def main():
                 data = patch_manifest(data, info)
             elif name == "res/zz.xml":
                 data = patch_provider_paths(data)
+            elif name == "lib/arm64-v8a/libGFrame.so":
+                if hashlib.sha256(data).hexdigest() != GFRAME_SHA256:
+                    parser.error("Unexpected bundled GFrame engine; do not apply these offsets")
+                patched = bytearray(data)
+                for start, end, code in fade_patches:
+                    patched[start:end] = code
+                data = bytes(patched)
             out.writestr(item, data)
         out.write(dex / "classes.dex", "classes2.dex", compress_type=zipfile.ZIP_DEFLATED)
         out.write(native, "lib/arm64-v8a/libamapextras.so", compress_type=zipfile.ZIP_STORED)

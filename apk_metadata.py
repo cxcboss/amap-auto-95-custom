@@ -97,8 +97,26 @@ def patch_manifest(data, info):
                 changed.add(name)
         if changed != {"versionName", "versionCode"}:
             raise ValueError("Baseline manifest is missing version attributes")
-        return xml.encode()
-    raise ValueError("Missing manifest element")
+        break
+    else:
+        raise ValueError("Missing manifest element")
+    # Remove only the legacy test alias; retain this receiver's standard actions.
+    removed = set()
+    for index, chunk in enumerate(xml.chunks):
+        if struct.unpack_from("<H", chunk)[0] != 0x102:
+            continue
+        if xml.strings[struct.unpack_from("<I", chunk, 20)[0]] != "action":
+            continue
+        start, size, count = struct.unpack_from("<HHH", chunk, 24)
+        for i in range(count):
+            pos = 16 + start + size * i
+            if (xml.strings[struct.unpack_from("<I", chunk, pos + 4)[0]] == "name"
+                    and chunk[pos + 15] == 3
+                    and xml.strings[struct.unpack_from("<I", chunk, pos + 16)[0]]
+                    == "com.autonavi.amapauto.receiver_test"):
+                removed.update((index, index + 1))
+    xml.chunks = [chunk for index, chunk in enumerate(xml.chunks) if index not in removed]
+    return xml.encode()
 
 
 def patch_provider_paths(data):

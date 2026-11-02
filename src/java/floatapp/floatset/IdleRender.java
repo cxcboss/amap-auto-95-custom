@@ -9,6 +9,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 /**
  * Lets the map engine drop its continuous follow rendering to 10 FPS while the car is
@@ -20,6 +22,11 @@ public final class IdleRender implements LocationListener {
     private static final float STILL_MPS = 1f;
     private static native void nativeSetIdle(boolean idle);
     private static native void nativeLowerVoicePriority();
+    private static final Executor VOICE_IO = Executors.newSingleThreadExecutor(task -> {
+        Thread worker = new Thread(task, "AmapVoicePriority");
+        worker.setPriority(Thread.MIN_PRIORITY);
+        return worker;
+    });
 
     private static volatile long lastWake;
     private static volatile boolean idle;
@@ -64,7 +71,7 @@ public final class IdleRender implements LocationListener {
 
     /** Also called when navigation starts, in case the voice engine created new threads. */
     static void lowerVoicePriority() {
-        nativeLowerVoicePriority();
+        VOICE_IO.execute(IdleRender::nativeLowerVoicePriority);
     }
 
     static void stop() {

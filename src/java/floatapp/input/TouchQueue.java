@@ -16,19 +16,23 @@ public final class TouchQueue {
         this.handler = handler;
     }
 
-    public synchronized void offer(MotionEvent event) {
-        long when = SystemClock.elapsedRealtimeNanos();
+    public void offer(MotionEvent event) {
         IdleRender.wake();
-        if (event.getActionMasked() == MotionEvent.ACTION_MOVE && pendingMove != null) {
-            pendingMove.event.recycle();
-            pendingMove.event = MotionEvent.obtainNoHistory(event);
-            pendingMove.when = when;
-            return;
+        // Waking a stationary map can enter native code. Do it outside the lock
+        // needed by AutoMainThread to dispatch the preceding input event.
+        synchronized (this) {
+            long when = SystemClock.elapsedRealtimeNanos();
+            if (event.getActionMasked() == MotionEvent.ACTION_MOVE && pendingMove != null) {
+                pendingMove.event.recycle();
+                pendingMove.event = MotionEvent.obtainNoHistory(event);
+                pendingMove.when = when;
+                return;
+            }
+            Event next = new Event(MotionEvent.obtainNoHistory(event), when);
+            // A pointer change or release closes the batch; its preceding move stays before it.
+            pendingMove = event.getActionMasked() == MotionEvent.ACTION_MOVE ? next : null;
+            handler.post(next);
         }
-        Event next = new Event(MotionEvent.obtainNoHistory(event), when);
-        // A pointer change or release closes the batch; its preceding move stays before it.
-        pendingMove = event.getActionMasked() == MotionEvent.ACTION_MOVE ? next : null;
-        handler.post(next);
     }
 
     private final class Event implements Runnable {
