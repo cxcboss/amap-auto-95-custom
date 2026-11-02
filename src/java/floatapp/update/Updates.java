@@ -40,15 +40,17 @@ public final class Updates {
     public static final class Release {
         public final int code, minSdk;
         public final long size;
-        public final String name, asset, url, sha256, notes, json;
+        public final String name, asset, localName, url, sha256, notes, json;
         Release(JSONObject data) throws JSONException, IOException {
             code = data.getInt("versionCode"); name = data.getString("versionName");
             minSdk = data.getInt("minSdk"); size = data.getLong("size");
             asset = data.getString("assetName"); url = data.getString("downloadUrl");
+            localName = name + "高德地图.apk";
             sha256 = data.getString("sha256"); notes = data.getString("notes"); json = data.toString();
             if (data.getInt("schemaVersion") != 1 || !BuildInfo.PACKAGE_NAME.equals(data.getString("packageName"))
                     || !name.matches("[1-9][0-9]*\\.[0-9]\\.9\\.5")
-                    || !asset.equals(name + "高德地图.apk") || code <= 0 || code >= 2100000000
+                    || !(asset.equals("amap-auto-" + name + ".apk") || asset.equals(localName))
+                    || code <= 0 || code >= 2100000000
                     || minSdk < 21 || size <= 0 || !sha256.matches("[0-9a-f]{64}"))
                 throw new IOException("版本信息不匹配");
             releaseUrl(url, "v" + name, asset);
@@ -82,7 +84,7 @@ public final class Updates {
             IO.execute(() -> {
                 try {
                     Release cached = new Release(new JSONObject(prefs.getString("downloadedRelease", "")));
-                    File file = new File(directory(), cached.asset);
+                    File file = new File(directory(), cached.localName);
                     verify(file, cached);
                     MAIN.post(() -> { release = cached; downloaded = file; state = State.READY; status = "已下载"; notifyChange(); });
                 } catch (IOException | JSONException invalid) {
@@ -123,26 +125,31 @@ public final class Updates {
                 } finally { request.disconnect(); }
                 if (github.getBoolean("draft") || github.getBoolean("prerelease")) throw new IOException("未找到正式版本");
                 JSONArray assets = github.getJSONArray("assets");
-                JSONObject metadata = null, apk = null;
+                JSONObject metadata = null;
                 for (int i = 0; i < assets.length(); i++) {
                     JSONObject asset = assets.getJSONObject(i);
                     if (asset.getString("name").equals("update.json")) metadata = asset;
-                    if (asset.getString("name").endsWith("高德地图.apk")) apk = asset;
                 }
-                if (metadata == null || apk == null) throw new IOException("发布文件不完整");
+                if (metadata == null) throw new IOException("发布文件不完整");
                 String metadataUrl = metadata.getString("browser_download_url");
                 releaseUrl(metadataUrl, github.getString("tag_name"), "update.json");
                 HttpURLConnection info = connect(metadataUrl);
                 Release found;
                 try { requireSuccess(info); found = new Release(readJson(info)); }
                 finally { info.disconnect(); }
+                JSONObject apk = null;
+                for (int i = 0; i < assets.length(); i++) {
+                    JSONObject asset = assets.getJSONObject(i);
+                    if (asset.getString("name").equals(found.asset)) apk = asset;
+                }
+                if (apk == null) throw new IOException("发布文件不完整");
                 if (!github.getString("tag_name").equals("v" + found.name)
                         || !apk.getString("name").equals(found.asset) || apk.getLong("size") != found.size
                         || !apk.getString("browser_download_url").equals(found.url)) throw new IOException("发布文件不匹配");
                 if (found.minSdk > Build.VERSION.SDK_INT) throw new IOException("新版本不支持当前安卓系统");
                 MAIN.post(() -> {
                     release = found;
-                    downloaded = new File(directory(), found.asset);
+                    downloaded = new File(directory(), found.localName);
                     state = previous == State.READY && found.code == previousRelease.code && found.sha256.equals(previousRelease.sha256)
                             ? State.READY : found.code > BuildInfo.VERSION_CODE ? State.AVAILABLE : State.LATEST;
                     status = state == State.READY ? "已下载" : state == State.AVAILABLE ? "发现新版本" : "已是最新版本";
@@ -165,7 +172,7 @@ public final class Updates {
         final WeakReference<Activity> installer = new WeakReference<>(host);
         state = State.DOWNLOADING; status = "正在下载"; error = ""; progress = 0; cancelled = false; notifyChange();
         IO.execute(() -> {
-            File folder = directory(), output = new File(folder, target.asset), partial = new File(folder, target.asset + ".part");
+            File folder = directory(), output = new File(folder, target.localName), partial = new File(folder, target.localName + ".part");
             try {
                 if (!Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState())
                         || (!folder.isDirectory() && !folder.mkdirs())) throw new IOException("无法写入高德更新目录");

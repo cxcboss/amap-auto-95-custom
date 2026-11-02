@@ -46,7 +46,7 @@ def inspect(apk, sdk, info):
 
 def metadata(folder, info):
     data = json.loads((folder / "update.json").read_text(encoding="utf-8"))
-    apk = folder / (info["versionName"] + "高德地图.apk")
+    apk = folder / ("amap-auto-" + info["versionName"] + ".apk")
     sha256 = hashlib.sha256(apk.read_bytes()).hexdigest()
     if (data["versionName"] != info["versionName"] or data["versionCode"] != info["versionCode"]
             or data["packageName"] != info["packageName"] or data["sha256"] != sha256
@@ -75,8 +75,16 @@ def online(folder, info, latest=False):
             raise ValueError("Public update.json differs from prepared manifest")
     if assets[apk.name]["browser_download_url"] != local["downloadUrl"]:
         raise ValueError("GitHub renamed the APK asset")
+    downloaded_hash = hashlib.sha256()
+    downloaded_size = 0
+    with urlopen(Request(local["downloadUrl"], headers={"User-Agent": "AmapCustomRelease"}), timeout=30) as response:
+        while block := response.read(1024 * 1024):
+            downloaded_hash.update(block)
+            downloaded_size += len(block)
+    if downloaded_size != local["size"] or downloaded_hash.hexdigest() != local["sha256"]:
+        raise ValueError("Public APK download differs from the signed local APK")
     print(remote["html_url"])
-    print("Public assets and update manifest match the signed local APK")
+    print("Public assets, update manifest and full APK download match the signed local APK")
 
 
 def main():
@@ -112,7 +120,7 @@ def main():
             raise ValueError("Release notes must describe the actual changes")
         folder = args.output.resolve()
         folder.mkdir(parents=True, exist_ok=True)
-        asset = info["versionName"] + "高德地图.apk"
+        asset = "amap-auto-" + info["versionName"] + ".apk"
         destination = folder / asset
         if apk != destination:
             shutil.copy2(apk, destination)
@@ -150,13 +158,15 @@ def main():
         print(run("gh", "release", "create", tag, apk, folder / "update.json", folder / "SHA256SUMS.txt",
                   "--repo", info["repository"], "--target", head, "--title", info["versionName"],
                   "--notes-file", folder / "release-notes.md", "--draft"), end="")
-        draft = json.loads(run("gh", "api", "repos/" + info["repository"] + "/releases/tags/" + tag))
+        drafts = json.loads(run("gh", "api", "repos/" + info["repository"] + "/releases"))
+        draft = next(item for item in drafts if item["tag_name"] == tag and item["draft"])
         expected = {file.name: "sha256:" + hashlib.sha256(file.read_bytes()).hexdigest()
                     for file in (apk, folder / "update.json", folder / "SHA256SUMS.txt")}
         uploaded = {asset["name"]: asset.get("digest") for asset in draft["assets"]}
         if expected != uploaded:
             raise ValueError("Draft assets differ; keep the draft unpublished and inspect it")
-        run("gh", "release", "edit", tag, "--repo", info["repository"], "--draft=false", "--latest")
+        run("gh", "api", "--method", "PATCH", "repos/" + info["repository"] + "/releases/" + str(draft["id"]),
+            "-F", "draft=false", "-f", "make_latest=true")
         online(folder, info, latest=True)
     elif args.action == "verify-online":
         online(args.folder.resolve(), info, latest=True)

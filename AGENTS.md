@@ -13,3 +13,4 @@
 - 本版仅对固定基线的 libGFrame.so 两段页面过渡日志块及旧资源动画的两条条件分支加入原生淡入淡出补丁；构建器校验完整库 SHA-256。修改时需同时核对 gframe_fade.S、gframe_fade.ld 和管理文档，不扩散到其他厂商库。
 - 1.3 正式构建移除清单中的 receiver_test 测试广播别名，保留 AUTONAVI_STANDARD_BROADCAST_RECV 等正式协议。辅助 Java/dex 使用正式编译参数，辅助 so 清除不需要的符号及调试信息；不对厂商主 dex 做整体重建或批量删除。
 - release.py 在 APK 发布入口拒绝调试、testOnly、instrumentation、测试广播别名和已知 QA 接口/限核探针。签名身份沿用旧包；本地签名文件是覆盖升级必需依赖，不能随测试垃圾删除。
+- GitHub 附件固定为 amap-auto-<versionName>.apk；本地交付及共享存储文件仍为 <versionName>高德地图.apk。GitHub 会移除附件名中的中文，不能再以中文名上传或匹配远端 APK。1.2 及更早版本需手动覆盖安装 1.3 一次；后续使用应用内更新。草稿按 release ID 读取/公开，不能在标签尚不存在时使用 releases/tags 查询草稿。
