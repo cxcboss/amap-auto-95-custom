@@ -11,6 +11,20 @@ from apk_metadata import patch_manifest, patch_provider_paths, version
 ROOT = Path(__file__).resolve().parent
 BASE_SHA256 = "7f88ecbcb20c16d07ed7f427d25b79a31062209295a133f3d846128b7cbc9b54"
 GFRAME_SHA256 = "3285048f3dc2b734de3fe1e30dd5a3ea4092f4dd6092b7c24a61f46741fd4a06"
+COMMON_SHA256 = "d0aad0a8f8bf0236bd365e9fd55a0ad081be378aac794855535c37807eef8e6e"
+
+# CGSceneUICmptMapElementLuming is the bottom road-name/speed capsule shared by
+# navigation and cruise. Its initScene already hides the speed group (+0xaf8).
+# Keep it hidden, skip its text/color updates, and retain the road and limit sign.
+# In this fixed library's executable LOAD segment, file offsets equal addresses.
+CAPSULE_SPEED_PATCHES = (
+    (0xc35de0, 0xd503201f),  # sceneLimitSpeedState: skip showing the speed group.
+    (0xc35e84, 0xd65f03c0),  # setTextSpeed: return before text/layout work.
+    (0xc3602c, 0xd65f03c0),  # sceneNormalSpeed: skip hidden speed styling.
+    (0xc360ac, 0x2a1f03f4),  # setVisibleSpeed: use false (mov w20, wzr).
+    (0xc36200, 0xaa1303e0),  # initScene: pass this instead of the speed child.
+    (0xc36208, 0x97ffff6e),  # initScene: call capsule_center at 0xc35fc0.
+)
 
 
 def main():
@@ -67,6 +81,15 @@ def main():
         if len(code) > end - start or len(code) % 4:
             parser.error("GFrame fade patch exceeds its original transition log block")
         fade_patches.append((start, end, code + bytes.fromhex("1f2003d5") * ((end - start - len(code)) // 4)))
+    center_object, center_linked = build / "capsule-center.o", build / "capsule-center.elf"
+    run(clang, "-c", ROOT / "src/native/capsule_center.S", "-o", center_object)
+    run(clang.parent / "ld.lld", "-T", ROOT / "src/native/capsule_center.ld",
+        "-e", "capsule_center", center_object, "-o", center_linked)
+    center_binary = build / "capsule-center.bin"
+    run(clang.parent / "llvm-objcopy", "--dump-section", ".capsule_center=" + str(center_binary), center_linked)
+    center_code = center_binary.read_bytes()
+    if len(center_code) > 0xc3602c - 0xc35fc0 or len(center_code) % 4:
+        parser.error("Capsule centering exceeds the disabled road-speed color method")
     sources = sorted((ROOT / "src/java").rglob("*.java")) + sorted((ROOT / "src/stubs").rglob("*.java")) + [generated]
     run("javac", "-source", "8", "-target", "8", "-g:none", "-encoding", "UTF-8", "-cp", android, "-d", classes, *sources)
     # Compile-only vendor signatures must never be included in the helper dex.
@@ -91,6 +114,14 @@ def main():
                 patched = bytearray(data)
                 for start, end, code in fade_patches:
                     patched[start:end] = code
+                data = bytes(patched)
+            elif name == "lib/arm64-v8a/libCommon.so":
+                if hashlib.sha256(data).hexdigest() != COMMON_SHA256:
+                    parser.error("Unexpected bundled Common engine; do not apply capsule offsets")
+                patched = bytearray(data)
+                for address, instruction in CAPSULE_SPEED_PATCHES:
+                    patched[address:address + 4] = instruction.to_bytes(4, "little")
+                patched[0xc35fc0:0xc35fc0 + len(center_code)] = center_code
                 data = bytes(patched)
             out.writestr(item, data)
         out.write(dex / "classes.dex", "classes2.dex", compress_type=zipfile.ZIP_DEFLATED)
