@@ -20,7 +20,7 @@ public final class SettingsEntry {
     static { System.loadLibrary("amapextras"); }
     private static native String nativePageType();
     private static native boolean nativeOpenEntry(int action, CruiseButton target);
-    private static Activity activity;
+    private static FrameLayout host;
     private static CruiseButton cruiseButton;
     private static String adjustedPage = "";
     private static boolean backgroundBack, settingsBack;
@@ -28,12 +28,20 @@ public final class SettingsEntry {
         if (cruiseButton != null) nativeOpenEntry(6, cruiseButton);
     };
     private static final Runnable settledRefresh = () -> refresh.run();
+    private static final View.OnLayoutChangeListener resized = (view, left, top, right, bottom,
+            oldLeft, oldTop, oldRight, oldBottom) -> {
+        if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+            IdleRender.wake();
+            adjustedPage = "";
+            schedule();
+        }
+    };
     public static void attach(Activity a, ViewGroup unused) {
         detach();
         HighRefresh.apply(a);
         IdleRender.start(a);
-        activity = a;
-        FrameLayout host = a.findViewById(android.R.id.content);
+        host = a.findViewById(android.R.id.content);
+        host.addOnLayoutChangeListener(resized);
         NativeSettings.bind(a);
         boolean dark = (a.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
         cruiseButton = new CruiseButton(a);
@@ -81,7 +89,10 @@ public final class SettingsEntry {
     }
     // Called by Amap's own day/night notification, independently of Android uiMode.
     public static void themeChanged() {
-        schedule();
+        if (cruiseButton != null) {
+            cruiseButton.removeCallbacks(refresh);
+            cruiseButton.postOnAnimation(refresh);
+        }
     }
     public static void touch(MotionEvent event) { if (event.getActionMasked() == MotionEvent.ACTION_UP) schedule(); }
     public static void key(KeyEvent event) { if (event.getAction() == KeyEvent.ACTION_UP) schedule(); }
@@ -112,7 +123,8 @@ public final class SettingsEntry {
         return root;
     }
     public static void state(int state) {
-        IdleRender.wake();
+        // Repeated day/night status is handled by the actual theme snapshot.
+        if (state != 37 && state != 38) IdleRender.wake();
         if (cruiseButton != null && ((state >= 8 && state <= 12)
                 || state == 24 || state == 25 || state == 46 || state == 47)) {
             cruiseButton.removeCallbacks(refresh);
@@ -132,6 +144,8 @@ public final class SettingsEntry {
     public static void detach() {
         IdleRender.stop();
         NativeSettings.detach();
+        if (host != null) host.removeOnLayoutChangeListener(resized);
+        host = null;
         if (cruiseButton != null) {
             cruiseButton.removeCallbacks(refresh);
             cruiseButton.removeCallbacks(settledRefresh);
@@ -140,7 +154,6 @@ public final class SettingsEntry {
         cruiseButton = null;
         adjustedPage = "";
         backgroundBack = settingsBack = false;
-        activity = null;
     }
 
     private static final class CruiseButton extends LinearLayout {
@@ -150,13 +163,13 @@ public final class SettingsEntry {
         CruiseButton(Context context) { super(context); }
 
         // The snapshot is queued on GFrame's thread, after its pending page work.
-        public void pageChanged(String page) {
+        public void pageChanged(String page, boolean dark, int speedRight, int speedTop) {
             post(() -> {
                 if (getParent() == null) return;
                 String name = page.toLowerCase(java.util.Locale.ROOT);
                 boolean cruise = name.contains("gfragmentcruise");
+                appearance(dark, speedRight, speedTop);
                 setVisibility(cruise && !opening ? View.VISIBLE : View.GONE);
-                if (cruise && !opening) nativeOpenEntry(3, this);
                 if (!page.equals(adjustedPage)) {
                     adjustedPage = page;
                     IdleRender.wake();
@@ -185,38 +198,31 @@ public final class SettingsEntry {
             schedule();
         }
 
-        @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
-            super.onSizeChanged(w, h, oldw, oldh);
-            schedule();
-        }
-
-        // Native snapshot is taken on GFrame's UI thread, then applied on Android's UI thread.
-        public void appearance(boolean dark, int speedRight, int speedTop) {
-            post(() -> {
-                if (getParent() == null) return;
-                if (night == null || night != dark) {
-                    night = dark;
-                    ((GradientDrawable) getBackground()).setColor(dark ? 0xff202630 : Color.WHITE);
-                    getChildAt(1).setBackgroundColor(dark ? 0xff36404d : 0xffedf0f4);
-                    for (int i = 0; i < 3; i += 2) {
-                        SearchButton button = (SearchButton) getChildAt(i);
-                        button.paint.setColor(dark ? 0xffdce6f3 : 0xff283442);
-                        ((RippleDrawable) button.getBackground()).setColor(
-                                ColorStateList.valueOf(dark ? 0x307e9fc7 : 0x182878ff));
-                        button.invalidate();
-                    }
+        // Part of the same GFrame snapshot, applied before showing the button.
+        private void appearance(boolean dark, int speedRight, int speedTop) {
+            if (night == null || night != dark) {
+                night = dark;
+                IdleRender.wake();
+                ((GradientDrawable) getBackground()).setColor(dark ? 0xff202630 : Color.WHITE);
+                getChildAt(1).setBackgroundColor(dark ? 0xff36404d : 0xffedf0f4);
+                for (int i = 0; i < 3; i += 2) {
+                    SearchButton button = (SearchButton) getChildAt(i);
+                    button.paint.setColor(dark ? 0xffdce6f3 : 0xff283442);
+                    ((RippleDrawable) button.getBackground()).setColor(
+                            ColorStateList.valueOf(dark ? 0x307e9fc7 : 0x182878ff));
+                    button.invalidate();
                 }
-                float density = getResources().getDisplayMetrics().density;
-                int inset = Math.round(16 * density);
-                int left = speedRight < 0 ? inset : Math.max(inset, speedRight + Math.round(12 * density));
-                int top = speedTop < 0 ? inset : speedTop;
-                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) getLayoutParams();
-                if (lp.getMarginStart() != left || lp.topMargin != top) {
-                    lp.setMarginStart(left);
-                    lp.topMargin = top;
-                    setLayoutParams(lp);
-                }
-            });
+            }
+            float density = getResources().getDisplayMetrics().density;
+            int inset = Math.round(16 * density);
+            int left = speedRight < 0 ? inset : Math.max(inset, speedRight + Math.round(12 * density));
+            int top = speedTop < 0 ? inset : speedTop;
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) getLayoutParams();
+            if (lp.getMarginStart() != left || lp.topMargin != top) {
+                lp.setMarginStart(left);
+                lp.topMargin = top;
+                setLayoutParams(lp);
+            }
         }
     }
 

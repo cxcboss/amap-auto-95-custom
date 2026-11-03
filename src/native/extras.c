@@ -98,12 +98,10 @@ static void panel_task_callback(PanelTask *task, int deliver, int night, int rig
     if (deliver) {
         if (task->action == 6) {
             jstring snapshot = (*env)->NewStringUTF(env, page);
-            (*env)->CallVoidMethod(env, task->target, task->callback, snapshot);
-            (*env)->DeleteLocalRef(env, snapshot);
-        } else if (task->action == 3)
-            (*env)->CallVoidMethod(env, task->target, task->callback,
+            (*env)->CallVoidMethod(env, task->target, task->callback, snapshot,
                     (jboolean)night, (jint)right, (jint)top);
-        else
+            (*env)->DeleteLocalRef(env, snapshot);
+        } else
             (*env)->CallVoidMethod(env, task->target, task->callback, (jboolean)night);
     }
     (*env)->DeleteGlobalRef(env, task->target);
@@ -119,9 +117,25 @@ static void panel_task_run(PanelTask *task) {
     int entry_changed = 0;
     if (task->action == 6) {
         const char *type = fragment ? (const char *)((void **)(*(void ***)fragment)[-1])[1] : "";
+        void *(*context)(void *) = frame ? dlsym(frame, "_ZN9GNS_FRAME10CGFragment10getContextEv") : 0;
+        int (*isNight)(void *) = frame ? dlsym(frame, "_ZNK9GNS_FRAME9CGContext7isNightEv") : 0;
+        int night = fragment && context && isNight ? isNight(context(fragment)) : 0;
+        int right = -1, top = -1;
+        if (strcmp(type, "N3hmi15GFragmentCruiseE") == 0) {
+            int (*appear)(void *) = dlsym(frame, "_ZNK9GNS_FRAME6CGView8isAppearEv");
+            void *root = *(void **)((char *)fragment + 0x3b0);
+            if (root && appear) {
+                void *speed = cruise_speed(root, appear);
+                if (speed) {
+                    right = *(int *)((char *)speed + 0xc8) + *(int *)((char *)speed + 0xb8)
+                            - *(int *)((char *)root + 0xc8);
+                    top = *(int *)((char *)speed + 0xcc) - *(int *)((char *)root + 0xcc);
+                }
+            }
+        }
         char page[384];
         snprintf(page, sizeof(page), "%d:%s", page_state, type);
-        panel_task_callback(task, 1, 0, 0, 0, page);
+        panel_task_callback(task, 1, night, right, top, page);
     } else if (fragment) {
         void **vtable = *(void ***)fragment;
         const char *name = (const char *)((void **)vtable[-1])[1];
@@ -155,22 +169,6 @@ static void panel_task_run(PanelTask *task) {
                 if (animation) *animation = previous;
                 if (workstation && vsync) vsync(workstation);
             }
-        } else if (task->action == 3 && strcmp(name, "N3hmi15GFragmentCruiseE") == 0) {
-            void *(*context)(void *) = dlsym(frame, "_ZN9GNS_FRAME10CGFragment10getContextEv");
-            int (*isNight)(void *) = dlsym(frame, "_ZNK9GNS_FRAME9CGContext7isNightEv");
-            int (*appear)(void *) = dlsym(frame, "_ZNK9GNS_FRAME6CGView8isAppearEv");
-            void *root = *(void **)((char *)fragment + 0x3b0);
-            if (root && context && isNight && appear) {
-                void *speed = cruise_speed(root, appear);
-                int right = -1, top = -1;
-                if (speed) {
-                    // VisualRect's absolute origin and measured size in this bundled CGView ABI.
-                    right = *(int *)((char *)speed + 0xc8) + *(int *)((char *)speed + 0xb8)
-                            - *(int *)((char *)root + 0xc8);
-                    top = *(int *)((char *)speed + 0xcc) - *(int *)((char *)root + 0xcc);
-                }
-                panel_task_callback(task, 1, isNight(context(fragment)), right, top, 0);
-            }
         } else if (task->action == 2 && strstr(name, "CGNaviFragment")) {
             void (*axis)(void *, float, float) = dlsym(frame,
                     "_ZN9GNS_FRAME6CGView12SetAxisRatioEff");
@@ -199,7 +197,6 @@ static void panel_task_delete(PanelTask *task) {
 }
 
 static jboolean post_panel_task(JNIEnv *env, jint action, jobject target, SettingsModel *model) {
-    void *lib = dlopen("libautonavi.so", RTLD_NOW | RTLD_NOLOAD);
     void *frame = dlopen("libGFrame.so", RTLD_NOW | RTLD_NOLOAD);
     void *(*appInstance)(void) = frame ? dlsym(frame, "_ZN9GNS_FRAME5CGApp11getInstanceEv") : 0;
     void *(*station)(void *, int) = frame ? dlsym(frame, "_ZNK9GNS_FRAME5CGApp14getWorkStationEi") : 0;
@@ -224,9 +221,7 @@ static jboolean post_panel_task(JNIEnv *env, jint action, jobject target, Settin
             task->target = (*env)->NewGlobalRef(env, target);
             jclass type = (*env)->GetObjectClass(env, target);
             if (task->action == 6)
-                task->callback = (*env)->GetMethodID(env, type, "pageChanged", "(Ljava/lang/String;)V");
-            else if (task->action == 3)
-                task->callback = (*env)->GetMethodID(env, type, "appearance", "(ZII)V");
+                task->callback = (*env)->GetMethodID(env, type, "pageChanged", "(Ljava/lang/String;ZII)V");
             else
                 task->callback = (*env)->GetMethodID(env, type, "entryFinished", "(Z)V");
             (*env)->DeleteLocalRef(env, type);
@@ -238,7 +233,6 @@ static jboolean post_panel_task(JNIEnv *env, jint action, jobject target, Settin
         queued = JNI_TRUE;
     }
     if (frame) dlclose(frame);
-    if (lib) dlclose(lib);
     return queued;
 }
 

@@ -305,7 +305,8 @@ static void ns_render(void *fragment, void *frame, SettingsModel *model) {
         *(int *)((char *)params + 0x30) = entry_left;
         *(int *)((char *)params + 0x34) = entry_top;
         ns_background(entry, bg);
-        NS_FN(void (*)(void *, int), 0x5b1a4c)(navigation, 1);
+        // Entry is a child of root; invalidate its cached constraint solution.
+        NS_FN(void (*)(void *), 0x5b1a28)(root);
         NS_FN(void (*)(void *, int), 0x625ce0)(root, 1);
     }
     void *old = ns_find(root, NS_PANEL);

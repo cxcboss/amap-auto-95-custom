@@ -15,17 +15,20 @@ public final class HighRefresh {
     public static void apply(Activity activity) {
         if (Build.VERSION.SDK_INT < 23) return;
         Display display = activity.getWindowManager().getDefaultDisplay();
-        Display.Mode best = display.getMode();
+        Display.Mode current = display.getMode();
+        Display.Mode best = current;
         for (Display.Mode mode : display.getSupportedModes()) {
             if (mode.getPhysicalWidth() == best.getPhysicalWidth()
                     && mode.getPhysicalHeight() == best.getPhysicalHeight()
                     && mode.getRefreshRate() > best.getRefreshRate()) best = mode;
         }
         final float rate = best.getRefreshRate();
-        WindowManager.LayoutParams params = activity.getWindow().getAttributes();
-        params.preferredDisplayModeId = best.getModeId();
-        params.preferredRefreshRate = rate;
-        activity.getWindow().setAttributes(params);
+        if (best.getModeId() != current.getModeId()) {
+            WindowManager.LayoutParams params = activity.getWindow().getAttributes();
+            params.preferredDisplayModeId = best.getModeId();
+            params.preferredRefreshRate = rate;
+            activity.getWindow().setAttributes(params);
+        }
         if (Build.VERSION.SDK_INT < 30) return;
         View root = activity.findViewById(android.R.id.content);
         root.post(() -> {

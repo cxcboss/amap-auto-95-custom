@@ -37,7 +37,7 @@ public final class BootStartup {
     public static void openStartupSettings(Context context) {
         Intent intent = new Intent().setClassName("com.miui.securitycenter",
             "com.miui.permcenter.autostart.AutoStartManagementActivity");
-        if (intent.resolveActivity(context.getPackageManager()) == null) {
+        if (context.getPackageManager().resolveActivity(intent, 0) == null) {
             intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.parse("package:" + context.getPackageName()));
         }

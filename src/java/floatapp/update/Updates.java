@@ -77,9 +77,10 @@ public final class Updates {
         app = context.getApplicationContext();
         prefs = app.getSharedPreferences("custom_updates", Context.MODE_PRIVATE);
         // An installed version, rather than an installer intent, confirms a completed update.
-        if (prefs.getInt("downloadedCode", 0) <= BuildInfo.VERSION_CODE)
+        int downloadedCode = prefs.getInt("downloadedCode", 0);
+        if (downloadedCode > 0 && downloadedCode <= BuildInfo.VERSION_CODE)
             prefs.edit().remove("downloadedCode").remove("downloadedRelease").apply();
-        else {
+        else if (downloadedCode > BuildInfo.VERSION_CODE) {
             state = State.VERIFYING; status = "正在校验安装包";
             IO.execute(() -> {
                 try {

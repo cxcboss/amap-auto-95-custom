@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent
 BASE_SHA256 = "7f88ecbcb20c16d07ed7f427d25b79a31062209295a133f3d846128b7cbc9b54"
 GFRAME_SHA256 = "3285048f3dc2b734de3fe1e30dd5a3ea4092f4dd6092b7c24a61f46741fd4a06"
 COMMON_SHA256 = "d0aad0a8f8bf0236bd365e9fd55a0ad081be378aac794855535c37807eef8e6e"
+AUTONAVI_SHA256 = "64974f89eb861f4103ee9e0b7047e978b52c4ede5f77c0072881e3c2eb6ed2df"
 
 # CGSceneUICmptMapElementLuming is the bottom road-name/speed capsule shared by
 # navigation and cruise. Its initScene already hides the speed group (+0xaf8).
@@ -28,6 +29,7 @@ CAPSULE_SPEED_PATCHES = (
 
 
 def main():
+    info = version()
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-apk", type=Path, required=True)
     parser.add_argument("--key", type=Path, required=True)
@@ -36,9 +38,8 @@ def main():
     parser.add_argument("--build-tools", default="36.1.0")
     parser.add_argument("--ndk", default="27.0.12077973")
     parser.add_argument("--platform", default="android-35")
-    parser.add_argument("--output", type=Path, default=ROOT / "build/amap-auto-95-custom.apk")
+    parser.add_argument("--output", type=Path, default=ROOT.parent / "成品" / (info["versionName"] + "高德地图.apk"))
     args = parser.parse_args()
-    info = version()
     if hashlib.sha256(args.base_apk.read_bytes()).hexdigest() != BASE_SHA256:
         parser.error("--base-apk must be the versionCode 26000007 cruise-response build")
     build = ROOT / "build"
@@ -90,6 +91,21 @@ def main():
     center_code = center_binary.read_bytes()
     if len(center_code) > 0xc3602c - 0xc35fc0 or len(center_code) % 4:
         parser.error("Capsule centering exceeds the disabled road-speed color method")
+    milestone_object, milestone_linked = build / "cruise-milestone.o", build / "cruise-milestone.elf"
+    run(clang, "-c", ROOT / "src/native/cruise_milestone.S", "-o", milestone_object)
+    run(clang.parent / "ld.lld", "-T", ROOT / "src/native/cruise_milestone.ld",
+        "-e", "milestone_guard", milestone_object, "-o", milestone_linked)
+    milestone_patches = []
+    for section, address, size in (("milestone_entry", 0xa7fb7c, 4),
+                                   ("milestone_log_skip", 0xa7fda4, 4),
+                                   ("milestone_guard", 0xa7fda8, 16),
+                                   ("milestone_wait_log_skip", 0xa80b84, 4)):
+        fragment = build / (section + ".bin")
+        run(clang.parent / "llvm-objcopy", "--dump-section", "." + section + "=" + str(fragment), milestone_linked)
+        code = fragment.read_bytes()
+        if len(code) != size:
+            parser.error("Unexpected cruise milestone patch size")
+        milestone_patches.append((address, code))
     sources = sorted((ROOT / "src/java").rglob("*.java")) + sorted((ROOT / "src/stubs").rglob("*.java")) + [generated]
     run("javac", "-source", "8", "-target", "8", "-g:none", "-encoding", "UTF-8", "-cp", android, "-d", classes, *sources)
     # Compile-only vendor signatures must never be included in the helper dex.
@@ -122,6 +138,13 @@ def main():
                 for address, instruction in CAPSULE_SPEED_PATCHES:
                     patched[address:address + 4] = instruction.to_bytes(4, "little")
                 patched[0xc35fc0:0xc35fc0 + len(center_code)] = center_code
+                data = bytes(patched)
+            elif name == "lib/arm64-v8a/libautonavi.so":
+                if hashlib.sha256(data).hexdigest() != AUTONAVI_SHA256:
+                    parser.error("Unexpected bundled navigation engine; do not apply milestone offsets")
+                patched = bytearray(data)
+                for address, code in milestone_patches:
+                    patched[address:address + len(code)] = code
                 data = bytes(patched)
             out.writestr(item, data)
         out.write(dex / "classes.dex", "classes2.dex", compress_type=zipfile.ZIP_DEFLATED)

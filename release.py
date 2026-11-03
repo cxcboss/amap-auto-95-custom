@@ -34,7 +34,7 @@ def inspect(apk, sdk, info):
         for name in archive.namelist():
             if name.endswith(".dex") or name == "lib/arm64-v8a/libamapextras.so":
                 data = archive.read(name)
-                if any(marker in data for marker in (b"http://127.0.0.1:27695", b"debug.amapqa.cpus", b"Lfloatapp/qa/", b"ArchiveProbe")):
+                if any(marker in data for marker in (b"http://127.0.0.1:27695", b"debug.amapqa.cpus", b"Lfloatapp/qa/", b"ArchiveProbe", b"AmapPerfProbe")):
                     raise ValueError("QA update endpoint or performance probe remains in " + name)
     signatures = run(tools / "apksigner", "verify", "--verbose", "--print-certs", apk)
     digest = re.search(r"Signer #1 certificate SHA-256 digest: ([0-9a-f]+)", signatures)
